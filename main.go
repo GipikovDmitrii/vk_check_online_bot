@@ -10,6 +10,8 @@ import (
 	"database/sql"
 	_ "github.com/mattn/go-sqlite3"
 	"strings"
+	"bytes"
+	"strconv"
 )
 
 var (
@@ -20,9 +22,10 @@ var (
 	fields        = "online,last_seen"
 
 	//SQL
-	addTelegramUserSQL = "INSERT INTO telegram_user (telegram_id) VALUES (?)"
-	addVKUserSQL       = "INSERT INTO vk_user (telegram_user_id, vk_id, last_online, last_platform) VALUES (?, ?, 0, 0)"
-	removeVKUserSQL    = "DELETE FROM vk_user WHERE vk_id = ? AND telegram_user_id = (SELECT id FROM telegram_user WHERE telegram_id = ?)"
+	addTelegramUserQuery           = "INSERT INTO telegram_user (telegram_id) VALUES (?)"
+	addVKUserQuery                 = "INSERT INTO vk_user (telegram_user_id, vk_id, last_online, last_platform) VALUES ((SELECT telegram_user.id FROM telegram_user WHERE telegram_id = ?), ?, 0, 0)"
+	removeVKUserQuery              = "DELETE FROM vk_user WHERE vk_id = ? AND telegram_user_id = (SELECT id FROM telegram_user WHERE telegram_id = ?)"
+	getAllUsersByTelegramUserQuery = "SELECT vk_id FROM vk_user WHERE telegram_user_id = (SELECT id FROM telegram_user WHERE telegram_id = ?)"
 
 	//Commands
 	start      = "/start"
@@ -67,8 +70,8 @@ var (
 )
 
 func main() {
-	prevuesCommands := make(map[int]string)
-	prevuesEnterUser := make(map[int]string)
+	previewCommands := make(map[int]string)
+	previewEnterUser := make(map[int]string)
 
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
@@ -102,54 +105,66 @@ func main() {
 		switch textMessage {
 		case start:
 			addTelegramUser(database, userID)
-			prevuesCommands[userID] = start
+			previewCommands[userID] = start
 			message.Text = messageAfterStart
 			message.ReplyMarkup = keyboardAfterStart
+			log.Println(keyboardAfterStart)
 			break
 		case addUser:
-			prevuesCommands[userID] = addUser
+			previewCommands[userID] = addUser
 			message.Text = messageAfterAddUser
 			message.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 			break
 		case removeUser:
-			prevuesCommands[userID] = removeUser
+			previewCommands[userID] = removeUser
+			users := getAllVKUserByTelegramUser(database, userID)
+			message.Text = "Выберите пользователя для удаления"
+			message.ReplyMarkup = getKeyboadrWithAllUsers(users)
 			break
 		case getUsers:
-			prevuesCommands[userID] = getUsers
+			previewCommands[userID] = getUsers
+			users := getAllVKUserByTelegramUser(database, userID)
+			message.Text = getFriendlyTextAboutUsers(users)
+			message.ReplyMarkup = keyboardAfterStart
 			break
 		case OK:
-			switch prevuesCommands[userID] {
+			switch previewCommands[userID] {
 			case addUser:
-				addVKUser(database, userID, prevuesEnterUser[userID])
+				addVKUser(database, userID, previewEnterUser[userID])
 				message.Text = "Пользователь добавлен"
 				message.ReplyMarkup = keyboardAfterStart
-				prevuesCommands[userID] = start
+				previewCommands[userID] = start
 			}
 			break
 		case NO:
-			switch prevuesCommands[userID] {
+			switch previewCommands[userID] {
 			case addUser:
 				message.Text = "К сожалению, мы не нашли пользователя"
 				message.ReplyMarkup = keyboardAfterStart
-				prevuesCommands[userID] = start
+				previewCommands[userID] = start
+				break
 			}
 			break
 		default:
-			switch prevuesCommands[userID] {
+			switch previewCommands[userID] {
 			case addUser:
 				user, err := getUser(textMessage)
-				if err != nil {
-					log.Panic(err)
-				}
-				prevuesEnterUser[userID] = textMessage
+				errorLog(err)
+				previewEnterUser[userID] = textMessage
 				message.Text = "*" + getName(user.FirstName, user.LastName) + "*"
 				message.ReplyMarkup = keyboardAfterEnterUser
+				message.ParseMode = "Markdown"
+				break
+			case removeUser:
+				removeVKUser(database, textMessage, userID)
+				message.Text = "Пользователь *" + textMessage + "* удален из списка"
+				message.ReplyMarkup = keyboardAfterStart
 				message.ParseMode = "Markdown"
 				break
 			}
 		}
 
-		log.Printf("[%s] %s | preview message: %s", update.Message.From.UserName, update.Message.Text, prevuesCommands[userID])
+		log.Printf("[%s] %s | preview message: %s", update.Message.From.UserName, update.Message.Text, previewCommands[userID])
 
 		bot.Send(message)
 	}
@@ -193,11 +208,29 @@ func getUser(userIds string) (User, error) {
 	return message.User[0], nil
 }
 
-func addTelegramUser(database *sql.DB, telegramID int) {
-	statement, e := database.Prepare(addTelegramUserSQL)
-	if e != nil {
-		log.Panic(e)
+func getFriendlyTextAboutUsers(users map[string]string) string {
+	var buffer bytes.Buffer
+	for k := range users {
+		buffer.WriteString(getFriendlyTextAboutUser(k))
+		buffer.WriteString("\n\n")
 	}
+	return buffer.String()
+}
+
+func getFriendlyTextAboutUser(userId string) string {
+	user, error := getUser(userId)
+	errorLog(error)
+	var buffer bytes.Buffer
+	buffer.WriteString("ID: " + strconv.Itoa(user.ID) + "\n")
+	buffer.WriteString("Name: " + getName(user.FirstName, user.LastName) + "\n")
+	buffer.WriteString("Online: " + isOnline(user.Online) + "\n")
+	buffer.WriteString("Web: " + isWebPlatform(user.LastSeen.Platform))
+	return buffer.String()
+}
+
+func addTelegramUser(database *sql.DB, telegramID int) {
+	statement, e := database.Prepare(addTelegramUserQuery)
+	errorLog(e)
 	result, e := statement.Exec(telegramID)
 	if e != nil && strings.Contains(e.Error(), "UNIQUE") {
 		log.Printf("Telegram user already exists")
@@ -209,10 +242,8 @@ func addTelegramUser(database *sql.DB, telegramID int) {
 }
 
 func addVKUser(database *sql.DB, telegramID int, vkID string) {
-	statement, e := database.Prepare(addVKUserSQL)
-	if e != nil {
-		log.Panic(e)
-	}
+	statement, e := database.Prepare(addVKUserQuery)
+	errorLog(e)
 	result, e := statement.Exec(telegramID, vkID)
 	if e != nil && strings.Contains(e.Error(), "UNIQUE") {
 		log.Printf("VK user already exists")
@@ -224,16 +255,49 @@ func addVKUser(database *sql.DB, telegramID int, vkID string) {
 }
 
 func removeVKUser(database *sql.DB, vkID string, telegramID int) {
-	statement, e := database.Prepare(removeVKUserSQL)
-	if e != nil {
-		log.Panic(e)
-	}
+	statement, e := database.Prepare(removeVKUserQuery)
+	errorLog(e)
+	startIndex := strings.Index(vkID, "[")
+	finishIndex := strings.Index(vkID, "]")
+	vkID = vkID[startIndex+1:finishIndex]
+	log.Println(vkID)
 	result, e := statement.Exec(vkID, telegramID)
 	if e != nil {
 		log.Panic(e)
 	} else {
 		log.Printf("VK user [%d] remove for user: %d. Result: %s", vkID, telegramID, result)
 	}
+}
+
+func getAllVKUserByTelegramUser(database *sql.DB, telegramID int) map[string]string {
+	log.Println(telegramID)
+	rows, e := database.Query(getAllUsersByTelegramUserQuery, telegramID)
+	errorLog(e)
+	users := make(map[string]string)
+	defer rows.Close()
+	for rows.Next() {
+		var vkId string
+		err := rows.Scan(&vkId)
+		errorLog(err)
+		user, err := getUser(vkId)
+		errorLog(err)
+		users[vkId] = getName(user.FirstName, user.LastName)
+	}
+	return users
+}
+
+func getKeyboadrWithAllUsers(users map[string]string) tgbotapi.ReplyKeyboardMarkup {
+	buttons := make([][]tgbotapi.KeyboardButton, len(users))
+	i := 0
+	for k, v := range users {
+		buttons[i] = tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(v + " [" + k + "]"))
+		i++
+	}
+	keyboard := tgbotapi.ReplyKeyboardMarkup{
+		ResizeKeyboard: true,
+		Keyboard:       buttons,
+	}
+	return keyboard
 }
 
 func getURL(userIds string) string {
@@ -266,11 +330,12 @@ type LastSeen struct {
 
 func InitDB(filepath string) *sql.DB {
 	db, err := sql.Open("sqlite3", filepath)
+	errorLog(err)
+	return db
+}
+
+func errorLog(err error) {
 	if err != nil {
 		panic(err)
 	}
-	if db == nil {
-		panic("db nil")
-	}
-	return db
 }
