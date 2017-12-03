@@ -30,11 +30,11 @@ var (
 
 	//Commands
 	start      = "/start"
-	addUser    = "Add user"
-	removeUser = "Delete user"
-	getUsers   = "Get a list of users"
-	OK         = "The name is correct. Add."
-	NO         = "The name is not correct"
+	addUser    = "➕ Add user"
+	removeUser = "➖ Delete user"
+	getUsers   = "📋 Get a list of users"
+	add        = "➕ Add"
+	cancel     = "✖ Cancel"
 
 	selectUserForDelete   = "Select user to delete"
 	userSuccessfullyAdded = "User successfully added"
@@ -48,8 +48,8 @@ var (
 	addUserButton    = tgbotapi.NewKeyboardButton(addUser)
 	removeUserButton = tgbotapi.NewKeyboardButton(removeUser)
 	getUsersButton   = tgbotapi.NewKeyboardButton(getUsers)
-	OKButton         = tgbotapi.NewKeyboardButton(OK)
-	NOButton         = tgbotapi.NewKeyboardButton(NO)
+	addButton        = tgbotapi.NewKeyboardButton(add)
+	cancelButton     = tgbotapi.NewKeyboardButton(cancel)
 
 	//Keyboards
 	keyboardAfterStart = tgbotapi.NewReplyKeyboard(
@@ -66,10 +66,16 @@ var (
 
 	keyboardAfterEnterUser = tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
-			OKButton,
+			addButton,
 		),
 		tgbotapi.NewKeyboardButtonRow(
-			NOButton,
+			cancelButton,
+		),
+	)
+
+	keyboardCancel = tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			cancelButton,
 		),
 	)
 
@@ -92,7 +98,7 @@ func main() {
 	bot, err := tgbotapi.NewBotAPI(token)
 	checkError(err)
 
-	database := InitDB("./database/vknotification.db")
+	database := InitDB("../../database/vknotification.db")
 
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 
@@ -122,7 +128,7 @@ func main() {
 		case addUser:
 			previewCommands[userID] = addUser
 			message.Text = messageAfterAddUser
-			message.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+			message.ReplyMarkup = keyboardCancel
 			break
 		case removeUser:
 			previewCommands[userID] = removeUser
@@ -141,7 +147,7 @@ func main() {
 			}
 			message.ReplyMarkup = keyboardAfterStart
 			break
-		case OK:
+		case add:
 			switch previewCommands[userID] {
 			case addUser:
 				addVKUser(database, userID, previewEnterUser[userID])
@@ -150,14 +156,10 @@ func main() {
 				previewCommands[userID] = start
 			}
 			break
-		case NO:
-			switch previewCommands[userID] {
-			case addUser:
-				message.Text = userNotFound
-				message.ReplyMarkup = keyboardAfterStart
-				previewCommands[userID] = start
-				break
-			}
+		case cancel:
+			previewCommands[userID] = start
+			message.Text = "Canceled"
+			message.ReplyMarkup = keyboardAfterStart
 			break
 		default:
 			switch previewCommands[userID] {
@@ -250,26 +252,26 @@ func getFriendlyTextAboutUser(userId string) string {
 func addTelegramUser(database *sql.DB, telegramID int) {
 	statement, e := database.Prepare(addTelegramUserQuery)
 	checkError(e)
-	result, e := statement.Exec(telegramID)
+	_, e = statement.Exec(telegramID)
 	if e != nil && strings.Contains(e.Error(), "UNIQUE") {
 		log.Printf("Telegram user already exists")
 	} else if e != nil && !strings.Contains(e.Error(), "UNIQUE") {
 		errorLog(e)
 	} else {
-		infoLog(fmt.Sprintf("Telegram user [%d] added. Result: %s", telegramID, result))
+		infoLog(fmt.Sprintf("Telegram user [%d] added.", telegramID))
 	}
 }
 
 func addVKUser(database *sql.DB, telegramID int, vkID string) {
 	statement, e := database.Prepare(addVKUserQuery)
 	checkError(e)
-	result, e := statement.Exec(telegramID, vkID)
+	_, e = statement.Exec(telegramID, vkID)
 	if e != nil && strings.Contains(e.Error(), "UNIQUE") {
 		log.Printf("VK user already exists")
 	} else if e != nil && !strings.Contains(e.Error(), "UNIQUE") {
 		errorLog(e)
 	} else {
-		infoLog(fmt.Sprintf("VK user [%d] added for user: %d. Result: %s", vkID, telegramID, result))
+		infoLog(fmt.Sprintf("VK user [%d] added for user: %d.", vkID, telegramID))
 	}
 }
 
@@ -279,11 +281,11 @@ func removeVKUser(database *sql.DB, vkID string, telegramID int) {
 	startIndex := strings.Index(vkID, "[")
 	finishIndex := strings.Index(vkID, "]")
 	vkID = vkID[startIndex+1:finishIndex]
-	result, e := statement.Exec(vkID, telegramID)
+	_, e = statement.Exec(vkID, telegramID)
 	if e != nil {
 		errorLog(e)
 	} else {
-		infoLog(fmt.Sprintf("VK user [%d] remove for user: %d. Result: %s", vkID, telegramID, result))
+		infoLog(fmt.Sprintf("VK user [%d] remove for user: %d.", vkID, telegramID))
 	}
 }
 
@@ -304,12 +306,13 @@ func getAllVKUserByTelegramUser(database *sql.DB, telegramID int) map[string]str
 }
 
 func getKeyboadrWithAllUsers(users map[string]string) tgbotapi.ReplyKeyboardMarkup {
-	buttons := make([][]tgbotapi.KeyboardButton, len(users))
+	buttons := make([][]tgbotapi.KeyboardButton, len(users)+1)
 	i := 0
 	for k, v := range users {
 		buttons[i] = tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(v + " [" + k + "]"))
 		i++
 	}
+	buttons[i] = tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(cancel))
 	keyboard := tgbotapi.ReplyKeyboardMarkup{
 		ResizeKeyboard: true,
 		Keyboard:       buttons,
@@ -357,14 +360,14 @@ func checkError(err error) {
 	}
 }
 
-func errorLog(err error)  {
+func errorLog(err error) {
 	log.Println("[ERROR] " + err.Error())
 }
 
-func debugLog(text string)  {
+func debugLog(text string) {
 	log.Println("[DEBUG] " + text)
 }
 
-func infoLog(text string)  {
+func infoLog(text string) {
 	log.Println("[INFO] " + text)
 }

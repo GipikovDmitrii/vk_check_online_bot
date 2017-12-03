@@ -3,8 +3,6 @@ package main
 import (
 	"database/sql"
 	"net/url"
-	"bytes"
-	"strconv"
 	"net/http"
 	"io/ioutil"
 	"encoding/json"
@@ -23,7 +21,7 @@ var (
 	fields        = "online,last_seen"
 
 	//SQL
-	getAllUsersQuery = "SELECT vk.id, tel.telegram_id, vk.last_online, vk.last_platform, vk.vk_id FROM vk_user AS vk, telegram_user AS tel"
+	getAllUsersQuery = "SELECT vk.id, tel.telegram_id, vk.last_online, vk.last_platform, vk.vk_id FROM vk_user vk LEFT JOIN telegram_user tel ON vk.telegram_user_id = tel.id"
 	updateUserQuery  = "UPDATE vk_user SET last_online = ?, last_platform = ? WHERE id = ?"
 
 	platfotmMap = map[int]string{
@@ -124,11 +122,11 @@ func getAllVKUsers(database *sql.DB) []UserDataBase {
 func updateVKUsers(database *sql.DB, id string, lastOnline int, lastPlatform int) {
 	statement, e := database.Prepare(updateUserQuery)
 	checkError(e)
-	result, e := statement.Exec(lastOnline, lastPlatform, id)
+	_, e = statement.Exec(lastOnline, lastPlatform, id)
 	if e != nil {
 		errorLog(e)
 	} else {
-		infoLog(fmt.Sprintf("VK user [%s] updated. Result: %s", id, result))
+		infoLog(fmt.Sprintf("VK user [%s] updated.", id))
 	}
 }
 
@@ -154,27 +152,8 @@ func getUser(userIds string) (User, error) {
 	}
 }
 
-func getFriendlyTextAboutUser(userId string) string {
-	user, e := getUser(userId)
-	checkError(e)
-	var buffer bytes.Buffer
-	buffer.WriteString("ID: " + strconv.Itoa(user.ID) + "\n")
-	buffer.WriteString("Name: " + getName(user.FirstName, user.LastName) + "\n")
-	buffer.WriteString("Online: " + isOnline(user.Online) + "\n")
-	buffer.WriteString("Platform: " + getWebPlatform(user.LastSeen.Platform))
-	return buffer.String()
-}
-
 func getName(firstName string, lastName string) string {
 	return firstName + " " + lastName
-}
-
-func isOnline(online int) string {
-	if online == 1 {
-		return "YES"
-	} else {
-		return "NO"
-	}
 }
 
 func getWebPlatform(platform int) string {
