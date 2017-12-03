@@ -12,6 +12,7 @@ import (
 	"strings"
 	"bytes"
 	"strconv"
+	"fmt"
 )
 
 var (
@@ -30,14 +31,18 @@ var (
 	//Commands
 	start      = "/start"
 	addUser    = "Add user"
-	removeUser = "Remove user"
-	getUsers   = "Get users"
-	OK         = "Имя правильное. Добавить"
-	NO         = "Имя не правильное"
+	removeUser = "Delete user"
+	getUsers   = "Get a list of users"
+	OK         = "The name is correct. Add."
+	NO         = "The name is not correct"
+
+	selectUserForDelete   = "Select user to delete"
+	userSuccessfullyAdded = "User successfully added"
+	userNotFound          = "User is not found 😔"
 
 	//Messages
-	messageAfterStart   = "Привет. Ты можешь добавить пользователя ВК, чтобы получать уведомления о том, когда пользователь появился или исчез из онлайна."
-	messageAfterAddUser = "Пожалуйста, пришлите ID пользователя."
+	messageAfterStart   = "You can add a VK user to be notified when the user is online or not online."
+	messageAfterAddUser = "Please send a VK ID"
 
 	//Buttons
 	addUserButton    = tgbotapi.NewKeyboardButton(addUser)
@@ -67,6 +72,17 @@ var (
 			NOButton,
 		),
 	)
+
+	platfotmMap = map[int]string{
+		1: "Mobile version",
+		2: "iPhone",
+		3: "iPad",
+		4: "Android",
+		5: "Windows Phone",
+		6: "Windows 10",
+		7: "PC browser",
+		8: "VK Mobile",
+	}
 )
 
 func main() {
@@ -74,13 +90,9 @@ func main() {
 	previewEnterUser := make(map[int]string)
 
 	bot, err := tgbotapi.NewBotAPI(token)
-	if err != nil {
-		log.Panic(err)
-	}
+	checkError(err)
 
-	database := InitDB("vknotification.db")
-
-	bot.Debug = true
+	database := InitDB("./database/vknotification.db")
 
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 
@@ -88,9 +100,7 @@ func main() {
 	u.Timeout = 60
 
 	updates, err := bot.GetUpdatesChan(u)
-	if err != nil {
-		log.Panic(err)
-	}
+	checkError(err)
 
 	for update := range updates {
 		if update.Message == nil {
@@ -108,7 +118,6 @@ func main() {
 			previewCommands[userID] = start
 			message.Text = messageAfterStart
 			message.ReplyMarkup = keyboardAfterStart
-			log.Println(keyboardAfterStart)
 			break
 		case addUser:
 			previewCommands[userID] = addUser
@@ -118,20 +127,25 @@ func main() {
 		case removeUser:
 			previewCommands[userID] = removeUser
 			users := getAllVKUserByTelegramUser(database, userID)
-			message.Text = "Выберите пользователя для удаления"
+			message.Text = selectUserForDelete
 			message.ReplyMarkup = getKeyboadrWithAllUsers(users)
 			break
 		case getUsers:
 			previewCommands[userID] = getUsers
 			users := getAllVKUserByTelegramUser(database, userID)
-			message.Text = getFriendlyTextAboutUsers(users)
+			text := getFriendlyTextAboutUsers(users)
+			if text == "" {
+				message.Text = "List is empty."
+			} else {
+				message.Text = text
+			}
 			message.ReplyMarkup = keyboardAfterStart
 			break
 		case OK:
 			switch previewCommands[userID] {
 			case addUser:
 				addVKUser(database, userID, previewEnterUser[userID])
-				message.Text = "Пользователь добавлен"
+				message.Text = userSuccessfullyAdded
 				message.ReplyMarkup = keyboardAfterStart
 				previewCommands[userID] = start
 			}
@@ -139,7 +153,7 @@ func main() {
 		case NO:
 			switch previewCommands[userID] {
 			case addUser:
-				message.Text = "К сожалению, мы не нашли пользователя"
+				message.Text = userNotFound
 				message.ReplyMarkup = keyboardAfterStart
 				previewCommands[userID] = start
 				break
@@ -149,15 +163,20 @@ func main() {
 			switch previewCommands[userID] {
 			case addUser:
 				user, err := getUser(textMessage)
-				errorLog(err)
-				previewEnterUser[userID] = textMessage
-				message.Text = "*" + getName(user.FirstName, user.LastName) + "*"
-				message.ReplyMarkup = keyboardAfterEnterUser
-				message.ParseMode = "Markdown"
+				checkError(err)
+				if user.ID == 0 {
+					message.Text = userNotFound
+					message.ReplyMarkup = keyboardAfterStart
+				} else {
+					message.Text = "*" + getName(user.FirstName, user.LastName) + "*"
+					previewEnterUser[userID] = textMessage
+					message.ReplyMarkup = keyboardAfterEnterUser
+					message.ParseMode = "Markdown"
+				}
 				break
 			case removeUser:
 				removeVKUser(database, textMessage, userID)
-				message.Text = "Пользователь *" + textMessage + "* удален из списка"
+				message.Text = "User *" + textMessage + "* successfully deleted"
 				message.ReplyMarkup = keyboardAfterStart
 				message.ParseMode = "Markdown"
 				break
@@ -176,18 +195,14 @@ func getName(firstName string, lastName string) string {
 
 func isOnline(online int) string {
 	if online == 1 {
-		return "yes"
+		return "YES"
 	} else {
-		return "no"
+		return "NO"
 	}
 }
 
-func isWebPlatform(platform int) string {
-	if platform == 7 {
-		return "yes"
-	} else {
-		return "no"
-	}
+func getWebPlatform(platform int) string {
+	return platfotmMap[platform]
 }
 
 func getUser(userIds string) (User, error) {
@@ -205,7 +220,11 @@ func getUser(userIds string) (User, error) {
 	if e != nil {
 		return User{}, e
 	}
-	return message.User[0], nil
+	if len(message.User) == 0 {
+		return User{}, e
+	} else {
+		return message.User[0], nil
+	}
 }
 
 func getFriendlyTextAboutUsers(users map[string]string) string {
@@ -218,69 +237,67 @@ func getFriendlyTextAboutUsers(users map[string]string) string {
 }
 
 func getFriendlyTextAboutUser(userId string) string {
-	user, error := getUser(userId)
-	errorLog(error)
+	user, e := getUser(userId)
+	checkError(e)
 	var buffer bytes.Buffer
 	buffer.WriteString("ID: " + strconv.Itoa(user.ID) + "\n")
 	buffer.WriteString("Name: " + getName(user.FirstName, user.LastName) + "\n")
 	buffer.WriteString("Online: " + isOnline(user.Online) + "\n")
-	buffer.WriteString("Web: " + isWebPlatform(user.LastSeen.Platform))
+	buffer.WriteString("Platform: " + getWebPlatform(user.LastSeen.Platform))
 	return buffer.String()
 }
 
 func addTelegramUser(database *sql.DB, telegramID int) {
 	statement, e := database.Prepare(addTelegramUserQuery)
-	errorLog(e)
+	checkError(e)
 	result, e := statement.Exec(telegramID)
 	if e != nil && strings.Contains(e.Error(), "UNIQUE") {
 		log.Printf("Telegram user already exists")
 	} else if e != nil && !strings.Contains(e.Error(), "UNIQUE") {
-		log.Panic(e)
+		errorLog(e)
 	} else {
-		log.Printf("Telegram user [%d] added. Result: %s", telegramID, result)
+		infoLog(fmt.Sprintf("Telegram user [%d] added. Result: %s", telegramID, result))
 	}
 }
 
 func addVKUser(database *sql.DB, telegramID int, vkID string) {
 	statement, e := database.Prepare(addVKUserQuery)
-	errorLog(e)
+	checkError(e)
 	result, e := statement.Exec(telegramID, vkID)
 	if e != nil && strings.Contains(e.Error(), "UNIQUE") {
 		log.Printf("VK user already exists")
 	} else if e != nil && !strings.Contains(e.Error(), "UNIQUE") {
-		log.Panic(e)
+		errorLog(e)
 	} else {
-		log.Printf("VK user [%d] added for user: %d. Result: %s", vkID, telegramID, result)
+		infoLog(fmt.Sprintf("VK user [%d] added for user: %d. Result: %s", vkID, telegramID, result))
 	}
 }
 
 func removeVKUser(database *sql.DB, vkID string, telegramID int) {
 	statement, e := database.Prepare(removeVKUserQuery)
-	errorLog(e)
+	checkError(e)
 	startIndex := strings.Index(vkID, "[")
 	finishIndex := strings.Index(vkID, "]")
 	vkID = vkID[startIndex+1:finishIndex]
-	log.Println(vkID)
 	result, e := statement.Exec(vkID, telegramID)
 	if e != nil {
-		log.Panic(e)
+		errorLog(e)
 	} else {
-		log.Printf("VK user [%d] remove for user: %d. Result: %s", vkID, telegramID, result)
+		infoLog(fmt.Sprintf("VK user [%d] remove for user: %d. Result: %s", vkID, telegramID, result))
 	}
 }
 
 func getAllVKUserByTelegramUser(database *sql.DB, telegramID int) map[string]string {
-	log.Println(telegramID)
 	rows, e := database.Query(getAllUsersByTelegramUserQuery, telegramID)
-	errorLog(e)
+	checkError(e)
 	users := make(map[string]string)
 	defer rows.Close()
 	for rows.Next() {
 		var vkId string
 		err := rows.Scan(&vkId)
-		errorLog(err)
+		checkError(err)
 		user, err := getUser(vkId)
-		errorLog(err)
+		checkError(err)
 		users[vkId] = getName(user.FirstName, user.LastName)
 	}
 	return users
@@ -330,12 +347,24 @@ type LastSeen struct {
 
 func InitDB(filepath string) *sql.DB {
 	db, err := sql.Open("sqlite3", filepath)
-	errorLog(err)
+	checkError(err)
 	return db
 }
 
-func errorLog(err error) {
+func checkError(err error) {
 	if err != nil {
-		panic(err)
+		errorLog(err)
 	}
+}
+
+func errorLog(err error)  {
+	log.Println("[ERROR] " + err.Error())
+}
+
+func debugLog(text string)  {
+	log.Println("[DEBUG] " + text)
+}
+
+func infoLog(text string)  {
+	log.Println("[INFO] " + text)
 }
