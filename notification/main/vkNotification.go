@@ -12,6 +12,7 @@ import (
 )
 
 func main() {
+	shared.InitLog("notification_log")
 	database := shared.InitDB()
 	for {
 		usersList := shared.GetAllVKUsers(database)

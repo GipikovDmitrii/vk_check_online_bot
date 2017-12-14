@@ -63,7 +63,7 @@ var (
 func main() {
 	previewCommands := make(map[int]string)
 	previewEnterUser := make(map[int]string)
-
+	shared.InitLog("bot_log")
 	bot, err := tgbotapi.NewBotAPI(shared.Token)
 	shared.CheckError(err)
 
